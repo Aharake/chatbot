@@ -1,28 +1,56 @@
-
 <div id="chatbot-container" style="position: fixed; bottom: 20px; right: 20px; width: 300px; background: white; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-  <div id="chatbot-messages" style="height: 200px; overflow-y: auto; padding: 10px;"></div>
-  <input id="chatbot-input" placeholder="Ask something..." style="width: 100%; padding: 10px; border: none; border-top: 1px solid #ccc;" />
+  <div id="chatbot-messages" style="height: 200px; overflow-y: auto; padding: 10px; font-family: Arial, sans-serif; font-size: 14px; color: #333;"></div>
+  <input id="chatbot-input" placeholder="Ask something..." style="width: 100%; padding: 10px; border: none; border-top: 1px solid #ccc; font-size: 14px;" />
 </div>
 
 <script>
-const input = document.getElementById("chatbot-input");
-const messages = document.getElementById("chatbot-messages");
+  const input = document.getElementById("chatbot-input");
+  const messages = document.getElementById("chatbot-messages");
 
-input.addEventListener("keypress", async (e) => {
-  if (e.key === "Enter") {
-    const msg = input.value;
-    messages.innerHTML += `<div><b>You:</b> ${msg}</div>`;
-    input.value = "";
+  // Simple function to safely escape HTML to avoid XSS in chat messages
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
 
-    const res = await fetch("/apps/chatbot/chatbot", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: msg })
-    });
-
-    const data = await res.json();
-    messages.innerHTML += `<div><b>Bot:</b> ${data.reply}</div>`;
+  function addMessage(sender, text) {
+    const safeText = escapeHtml(text);
+    messages.innerHTML += `<div><b>${sender}:</b> ${safeText}</div>`;
     messages.scrollTop = messages.scrollHeight;
   }
-});
+
+  input.addEventListener("keypress", async (e) => {
+    if (e.key === "Enter" && input.value.trim() !== "") {
+      const msg = input.value.trim();
+      addMessage("You", msg);
+      input.value = "";
+      input.disabled = true;  // disable input while waiting
+
+      try {
+        console.log("Sending message to chatbot:", msg);
+        const res = await fetch("/apps/chatbot/chatbot", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg }),
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error("Chatbot API error:", res.status, errorText);
+          addMessage("Bot", `Error: ${res.status} ${errorText || res.statusText}`);
+        } else {
+          const data = await res.json();
+          console.log("Received reply:", data.reply);
+          addMessage("Bot", data.reply || "No response from bot.");
+        }
+      } catch (err) {
+        console.error("Fetch error:", err);
+        addMessage("Bot", "Error connecting to chatbot.");
+      } finally {
+        input.disabled = false;
+        input.focus();
+      }
+    }
+  });
 </script>
