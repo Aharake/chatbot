@@ -41,13 +41,32 @@ async function fetchProducts() {
 }
 
 export default async function handler(req, res) {
+  // CORS headers - adjust allowed origin accordingly
+  const allowedOrigin = "https://aliharake.pro"; // Change this to your Shopify store domain or use '*' for testing
+
+  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    // Handle preflight requests
+    res.status(200).end();
+    return;
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
   const { message } = req.body;
 
+  if (!message || message.trim() === "") {
+    return res.status(400).json({ error: "Message is required" });
+  }
+
   try {
+    console.log("Received message:", message);
+
     const products = await fetchProducts();
 
     const productList = products
@@ -55,7 +74,7 @@ export default async function handler(req, res) {
       .join("\n");
 
     const openaiResponse = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",   // Use GPT-3.5 turbo here
+      model: "gpt-3.5-turbo",
       messages: [
         {
           role: "system",
@@ -69,9 +88,11 @@ export default async function handler(req, res) {
     });
 
     const reply = openaiResponse.choices[0].message.content;
+    console.log("OpenAI reply:", reply);
+
     res.status(200).json({ reply });
   } catch (error) {
-    console.error(error);
+    console.error("Error in handler:", error.response?.data || error.message || error);
     res.status(500).json({ error: "Error fetching products or generating reply" });
   }
 }
