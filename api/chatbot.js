@@ -1,11 +1,11 @@
-import { Configuration, OpenAIApi } from "openai";
+import OpenAI from "openai";
 
-const openai = new OpenAIApi(new Configuration({
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-}));
+});
 
 const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
-const SHOPIFY_DOMAIN = "your-store.myshopify.com"; 
+const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com"; // replace with your actual store domain
 
 async function fetchProducts() {
   const query = `
@@ -50,10 +50,12 @@ export default async function handler(req, res) {
   try {
     const products = await fetchProducts();
 
-    const productList = products.map(p => `${p.title} - $${p.priceRange.minVariantPrice.amount}`).join("\n");
+    const productList = products
+      .map(p => `${p.title} - $${p.priceRange.minVariantPrice.amount}`)
+      .join("\n");
 
-    const openaiResponse = await openai.createChatCompletion({
-      model: "gpt-4",
+    const openaiResponse = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",   // Use GPT-3.5 turbo here
       messages: [
         {
           role: "system",
@@ -66,7 +68,7 @@ export default async function handler(req, res) {
       ],
     });
 
-    const reply = openaiResponse.data.choices[0].message.content;
+    const reply = openaiResponse.choices[0].message.content;
     res.status(200).json({ reply });
   } catch (error) {
     console.error(error);
