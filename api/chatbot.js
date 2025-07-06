@@ -5,7 +5,7 @@ const openai = new OpenAI({
 });
 
 const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
-const SHOPIFY_DOMAIN = "your-store.myshopify.com"; // replace with your actual store domain
+const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com"; // replace with your actual store domain
 
 async function fetchProducts() {
   const query = `
