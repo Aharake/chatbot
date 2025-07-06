@@ -1,0 +1,17 @@
+{
+  "dependencies": {
+    "@shopify/shopify-api": "^11.13.0",
+    "node-fetch": "^3.3.2",
+    "openai": "^5.8.2"
+  },
+  "name": "chattest",
+  "description": "## Features: - Embedded chatbot UI for storefront - Backend chatbot logic using OpenAI - Shopify Admin API integration for product data",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
