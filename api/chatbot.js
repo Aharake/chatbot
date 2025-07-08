@@ -49,30 +49,23 @@ async function fetchProducts() {
   return data.data.products.edges.map(edge => edge.node);
 }
 
-let userOrderMemory = {};
-
-function isOrderComplete(order) {
-  // Removed address from completeness check as requested
-  return (
-    order.name &&
-    order.phone &&
-    order.product &&
-    order.size
-  );
-}
-
-function getNextMissingField(order) {
-  if (!order.name) return "full name";
-  // Skipping address prompt completely
-  if (!order.phone) return "phone number";
-  if (!order.product || !order.size) return "product name and size";
-  return null;
-}
-
 const isSmallTalk = message => {
   const normalized = message.toLowerCase();
   return ["hello", "hi", "hey", "good morning", "good evening"].some(p => normalized.includes(p));
 };
+
+const isProductInquiry = message => {
+  return /(in stock|available|have|stock)/i.test(message);
+};
+
+function mapHeightToSize(height) {
+  if (height >= 205) return "2XL";
+  if (height >= 195) return "XL";
+  if (height >= 180) return "L";
+  if (height >= 160) return "M";
+  if (height >= 140) return "S";
+  return null;
+}
 
 export default async function handler(req, res) {
   const allowedOrigin = "https://aliharake.pro";
@@ -84,112 +77,69 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const { message } = req.body;
-  const userId = "shopify-session";
-  if (!userOrderMemory[userId]) userOrderMemory[userId] = {};
-  const order = userOrderMemory[userId];
+  const msgLower = message.toLowerCase();
 
   try {
     if (isSmallTalk(message)) {
-      return res.status(200).json({ reply: "👋 Hello! I'm your shopping assistant. I can help you place an order. Just tell me what you'd like to buy!" });
+      return res.status(200).json({
+        reply: "👋 Hello! I'm your shopping assistant. I can help you with product info and sizing. Ask me about our products!"
+      });
     }
 
-    const products = await fetchProducts();
-    const productTitles = products.map(p => p.title).join("\n");
+    // Check for height in cm (e.g. "I'm 175 cm tall")
+    const heightMatch = message.match(/\b(1[4-9][0-9]|2[0-1][0-9]|205|20[6-9]|210|215|220)\b/);
+    let detectedSize = null;
+    if (heightMatch) {
+      const height = parseInt(heightMatch[0], 10);
+      detectedSize = mapHeightToSize(height);
+    }
 
-    const systemPrompt = `You are a helpful shopping assistant chatbot. You are collecting an order for a Shopify store. Products available:\n${productTitles}\n\nAsk the user for their name, phone number, product name and size. Accept height in cm and map it to sizes:\n- 140-160 cm: S\n- 160-180 cm: M\n- 180-195 cm: L\n- 195-205 cm: XL\n- 205+ cm: 2XL\nRespond with one missing field at a time, and once all fields are collected, summarize the order. Don't ask the user to re-enter details they already gave. Just help if they ask questions.`;
-
-    const chatHistory = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: message }
-    ];
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: chatHistory,
-    });
-
-    const reply = completion.choices[0].message.content;
-
-    // Store name if valid (improved heuristic to avoid false asks)
-    if (!order.name) {
-      const words = message.trim().split(/\s+/);
-      const looksLikeName = (
-        words.length >= 2 &&
-        words.length <= 4 &&
-        words.every(w => /^[a-zA-Z]{2,}$/.test(w))
+    if (isProductInquiry(message)) {
+      const products = await fetchProducts();
+      const matchedProduct = products.find(p =>
+        msgLower.includes(p.title.toLowerCase())
       );
 
-      if (looksLikeName) {
-        order.name = message.trim();
+      if (matchedProduct) {
+        const availableVariants = matchedProduct.variants.edges.filter(v => v.node.availableForSale);
+        if (availableVariants.length > 0) {
+          let sizeMsg = "";
+          if (detectedSize) {
+            sizeMsg = ` Based on your height, the recommended size is ${detectedSize}.`;
+          }
+          return res.status(200).json({
+            reply: `Yes, ${matchedProduct.title} is available in sizes: ${availableVariants.map(v => v.node.title).join(", ")}.${sizeMsg}`
+          });
+        } else {
+          return res.status(200).json({
+            reply: `Sorry, ${matchedProduct.title} is currently out of stock.`
+          });
+        }
       } else {
-        // If input too short or not name-like, respond softly
         return res.status(200).json({
-          reply: "🙂 Could you please provide your full name to continue your order?"
+          reply: `Sorry, I couldn't find that product. Please ask about another item or browse our products.`
         });
       }
     }
 
-    // No more address collection
-
-    if (!order.phone) {
-      const phoneMatch = message.match(/(?:phone is|call me at)?\s*(\+?\d{7,15})/);
-      if (phoneMatch) {
-        order.phone = phoneMatch[1].trim();
-      }
-    }
-
-    if (!order.size) {
-      const sizeMatch = message.match(/\b(S|M|L|XL|2XL)\b/i);
-      if (sizeMatch) {
-        order.size = sizeMatch[1].toUpperCase();
-      } else {
-        const heightMatch = message.match(/\b(1[4-9][0-9]|2[0-1][0-9]|20[5-9])\b/);
-        if (heightMatch) {
-          const height = parseInt(heightMatch[0]);
-          if (height < 160) order.size = "S";
-          else if (height < 180) order.size = "M";
-          else if (height < 195) order.size = "L";
-          else if (height < 205) order.size = "XL";
-          else order.size = "2XL";
-        }
-      }
-    }
-
-    if (!order.product) {
-      for (let p of products) {
-        if (message.toLowerCase().includes(p.title.toLowerCase())) {
-          order.product = p.title;
-          break;
-        }
-      }
-    }
-
-    if (!isOrderComplete(order)) {
-      const missing = getNextMissingField(order);
-      return res.status(200).json({ reply: `Please provide your ${missing}.` });
-    }
-
-    const matchedProduct = products.find(p => p.title.toLowerCase().includes(order.product.toLowerCase()));
-    const matchedVariant = matchedProduct.variants.edges.find(edge =>
-      edge.node.title.toLowerCase().includes(order.size.toLowerCase())
-    );
-
-    if (!matchedVariant || !matchedVariant.node.availableForSale) {
-      return res.status(200).json({ reply: `Sorry, ${order.product} in size ${order.size} is out of stock.` });
-    }
-
-    const variantIdShort = matchedVariant.node.id.split("/").pop();
-    const checkoutUrl = `https://${SHOPIFY_DOMAIN}/cart/${variantIdShort}:1`;
-
-    // Clear order memory so next order can start fresh
-    userOrderMemory[userId] = {};
-
-    return res.status(200).json({
-      reply: `✅ Order confirmed!\n\n👤 Name: ${order.name}\n📞 Phone: ${order.phone}\n🛍️ Product: ${order.product} (${order.size})\n\n👉 <a href="${checkoutUrl}" target="_blank" rel="noopener noreferrer">Click here to checkout</a>\n\nIf you have any other questions, just ask!`
+    // Fallback to GPT-3.5 for anything else, telling it not to ask for personal info
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: "You are a friendly shopping assistant chatbot that helps users with product info and sizing advice. Do not ask for orders or personal info."
+        },
+        { role: "user", content: message }
+      ],
     });
 
+    const reply = completion.choices[0].message.content;
+
+    return res.status(200).json({ reply });
+
   } catch (error) {
-    console.error("Order error:", error);
-    return res.status(500).json({ error: "Order processing failed." });
+    console.error("Error:", error);
+    return res.status(500).json({ error: "Something went wrong." });
   }
 }
