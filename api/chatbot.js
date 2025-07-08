@@ -51,8 +51,8 @@ async function fetchProducts() {
 
 let userOrderMemory = {};
 
-// Removed address from order completion
 function isOrderComplete(order) {
+  // Removed address from completeness check as requested
   return (
     order.name &&
     order.phone &&
@@ -61,24 +61,18 @@ function isOrderComplete(order) {
   );
 }
 
-// Removed address from missing fields
 function getNextMissingField(order) {
   if (!order.name) return "full name";
+  // Skipping address prompt completely
   if (!order.phone) return "phone number";
   if (!order.product || !order.size) return "product name and size";
   return null;
 }
 
 const isSmallTalk = message => {
-  const normalized = message.toLowerCase().trim();
-  const greetings = [
-    "hello", "hi", "hey", "ey", "good morning", "good evening",
-    "warrup", "what's up", "sup", "yo", "howdy", "hey there"
-  ];
-  return greetings.some(p => normalized === p || normalized.includes(p));
+  const normalized = message.toLowerCase();
+  return ["hello", "hi", "hey", "good morning", "good evening"].some(p => normalized.includes(p));
 };
-
-const casualReplies = ["warrup", "what's up", "sup", "yo", "hey", "ey"];
 
 export default async function handler(req, res) {
   const allowedOrigin = "https://aliharake.pro";
@@ -99,11 +93,6 @@ export default async function handler(req, res) {
       return res.status(200).json({ reply: "👋 Hello! I'm your shopping assistant. I can help you place an order. Just tell me what you'd like to buy!" });
     }
 
-    // Friendly fallback for casual greetings that are not recognized as full small talk
-    if (casualReplies.some(c => message.toLowerCase().includes(c))) {
-      return res.status(200).json({ reply: "🙂 Hey! To get started, please tell me your full name or what you'd like to buy." });
-    }
-
     const products = await fetchProducts();
     const productTitles = products.map(p => p.title).join("\n");
 
@@ -121,21 +110,27 @@ export default async function handler(req, res) {
 
     const reply = completion.choices[0].message.content;
 
-    // Store name if valid (simple heuristic)
+    // Store name if valid (improved heuristic to avoid false asks)
     if (!order.name) {
       const words = message.trim().split(/\s+/);
-      if (
+      const looksLikeName = (
         words.length >= 2 &&
         words.length <= 4 &&
         words.every(w => /^[a-zA-Z]{2,}$/.test(w))
-      ) {
+      );
+
+      if (looksLikeName) {
         order.name = message.trim();
+      } else {
+        // If input too short or not name-like, respond softly
+        return res.status(200).json({
+          reply: "🙂 Could you please provide your full name to continue your order?"
+        });
       }
     }
 
-    // Removed address extraction
+    // No more address collection
 
-    // Phone extraction
     if (!order.phone) {
       const phoneMatch = message.match(/(?:phone is|call me at)?\s*(\+?\d{7,15})/);
       if (phoneMatch) {
@@ -143,7 +138,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Size extraction by explicit size or height mapping
     if (!order.size) {
       const sizeMatch = message.match(/\b(S|M|L|XL|2XL)\b/i);
       if (sizeMatch) {
@@ -161,7 +155,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Product matching
     if (!order.product) {
       for (let p of products) {
         if (message.toLowerCase().includes(p.title.toLowerCase())) {
@@ -171,13 +164,11 @@ export default async function handler(req, res) {
       }
     }
 
-    // If order incomplete, ask next missing field
     if (!isOrderComplete(order)) {
       const missing = getNextMissingField(order);
       return res.status(200).json({ reply: `Please provide your ${missing}.` });
     }
 
-    // Check stock availability
     const matchedProduct = products.find(p => p.title.toLowerCase().includes(order.product.toLowerCase()));
     const matchedVariant = matchedProduct.variants.edges.find(edge =>
       edge.node.title.toLowerCase().includes(order.size.toLowerCase())
@@ -190,7 +181,7 @@ export default async function handler(req, res) {
     const variantIdShort = matchedVariant.node.id.split("/").pop();
     const checkoutUrl = `https://${SHOPIFY_DOMAIN}/cart/${variantIdShort}:1`;
 
-    // Clear order memory for next user
+    // Clear order memory so next order can start fresh
     userOrderMemory[userId] = {};
 
     return res.status(200).json({
