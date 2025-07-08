@@ -5,7 +5,7 @@ const openai = new OpenAI({
 });
 
 const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
-const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com"; // replace with your store domain
+const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com";
 
 async function fetchProducts() {
   const query = `
@@ -49,7 +49,6 @@ async function fetchProducts() {
   return data.data.products.edges.map(edge => edge.node);
 }
 
-// Simple memory store — replace with real DB/session if needed
 let userOrderMemory = {};
 
 function isOrderComplete(order) {
@@ -80,11 +79,10 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const { message } = req.body;
-  const userId = "shopify-session"; // In production, use real session/user ID
+  const userId = "shopify-session";
   if (!userOrderMemory[userId]) userOrderMemory[userId] = {};
   const order = userOrderMemory[userId];
 
-  // Use OpenAI to parse message and extract details
   try {
     const products = await fetchProducts();
     const productTitles = products.map(p => p.title).join("\n");
@@ -103,33 +101,48 @@ export default async function handler(req, res) {
 
     const reply = completion.choices[0].message.content;
 
-    // Attempt to extract user info from the message
     if (!order.name) {
-  const nameMatch = message.match(/(?:my name is|i am|i'm)\s+([a-zA-Z\s]+)/i);
-  if (nameMatch) {
-    order.name = nameMatch[1].trim();
-  } else if (!order.address && !order.phone && message.trim().split(" ").length <= 4) {
-    // Fallback: assume it's a name if it's short and no other fields exist yet
-    order.name = message.trim();
-  }
-}
+      const nameMatch = message.match(/(?:my name is|i am|i'm)\s+([a-zA-Z\s]+)/i);
+      if (nameMatch) {
+        order.name = nameMatch[1].trim();
+      } else if (/^[a-zA-Z ]{3,30}$/.test(message.trim())) {
+        order.name = message.trim();
+      }
+    }
 
-    if (!order.address && /address is|live at ([^\n]+)/i.test(message)) {
-      const match = message.match(/address is|live at ([^\n]+)/i);
-      order.address = match[1].trim();
+    if (!order.address) {
+      const addressMatch = message.match(/(?:address is|live at|located at)\s+(.+)/i);
+      if (addressMatch) {
+        order.address = addressMatch[1].trim();
+      } else if (message.length >= 10 && /[a-zA-Z]{3,}/.test(message)) {
+        order.address = message.trim();
+      }
     }
-    if (!order.phone && /phone is|call me at ([0-9\-\+ ]+)/i.test(message)) {
-      const match = message.match(/phone is|call me at ([0-9\-\+ ]+)/i);
-      order.phone = match[1].trim();
+
+    if (!order.phone) {
+      const phoneMatch = message.match(/(?:phone is|call me at)?\s*(\+?\d{7,15})/);
+      if (phoneMatch) {
+        order.phone = phoneMatch[1].trim();
+      }
     }
-    if (!order.size && /\b(140|150|160|170|180|190|200|210)\b/.test(message)) {
-      const height = parseInt(message.match(/\b(140|150|160|170|180|190|200|210)\b/)[0]);
-      if (height < 160) order.size = "S";
-      else if (height < 180) order.size = "M";
-      else if (height < 195) order.size = "L";
-      else if (height < 205) order.size = "XL";
-      else order.size = "2XL";
+
+    if (!order.size) {
+      const sizeMatch = message.match(/\b(S|M|L|XL|2XL)\b/i);
+      if (sizeMatch) {
+        order.size = sizeMatch[1].toUpperCase();
+      } else {
+        const heightMatch = message.match(/\b(1[4-9][0-9]|2[0-1][0-9])\b/);
+        if (heightMatch) {
+          const height = parseInt(heightMatch[0]);
+          if (height < 160) order.size = "S";
+          else if (height < 180) order.size = "M";
+          else if (height < 195) order.size = "L";
+          else if (height < 205) order.size = "XL";
+          else order.size = "2XL";
+        }
+      }
     }
+
     if (!order.product) {
       for (let p of products) {
         if (message.toLowerCase().includes(p.title.toLowerCase())) {
@@ -154,7 +167,6 @@ export default async function handler(req, res) {
     }
 
     const checkoutUrl = `https://${SHOPIFY_DOMAIN}/cart/${matchedVariant.node.id.split("/").pop()}:1`;
-
     userOrderMemory[userId] = null;
 
     return res.status(200).json({
