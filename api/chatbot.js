@@ -5,20 +5,24 @@ const openai = new OpenAI({
 });
 
 const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
-const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com"; // replace with your actual store domain
+const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com";
 
+// -----------------------------
+// Fetch Products and Variants
+// -----------------------------
 async function fetchProducts() {
   const query = `
     {
-      products(first: 5) {
+      products(first: 10) {
         edges {
           node {
+            id
             title
             description
-            onlineStoreUrl
             variants(first: 10) {
               edges {
                 node {
+                  id
                   title
                   availableForSale
                   price {
@@ -46,75 +50,132 @@ async function fetchProducts() {
   return data.data.products.edges.map(edge => edge.node);
 }
 
+// -----------------------------
+// Recommend Size by Height
+// -----------------------------
+function recommendSize(height) {
+  if (height >= 140 && height < 160) return "S";
+  if (height >= 160 && height < 180) return "M";
+  if (height >= 180 && height < 195) return "L";
+  if (height >= 195 && height < 210) return "XL";
+  return "2XL";
+}
+
+// -----------------------------
+// Create Checkout Link
+// -----------------------------
+async function createCheckoutLineItems(variantId) {
+  const checkoutQuery = `
+    mutation {
+      checkoutCreate(input: {
+        lineItems: [
+          {
+            variantId: "${variantId}",
+            quantity: 1
+          }
+        ]
+      }) {
+        checkout {
+          id
+          webUrl
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const response = await fetch(`https://${SHOPIFY_DOMAIN}/api/2023-07/graphql.json`, {
+    method: "POST",
+    headers: {
+      "X-Shopify-Storefront-Access-Token": SHOPIFY_TOKEN,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query: checkoutQuery }),
+  });
+
+  const result = await response.json();
+  return result.data.checkoutCreate.checkout.webUrl;
+}
+
+// -----------------------------
+// API Handler
+// -----------------------------
 export default async function handler(req, res) {
-  // CORS headers
+  // --- CORS ---
   const allowedOrigin = "https://aliharake.pro";
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
+  }
 
-  const { message } = req.body;
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  const { message, height, name, phone, address, selectedProduct, selectedSize } = req.body;
+
   if (!message || message.trim() === "") {
     return res.status(400).json({ error: "Message is required" });
   }
 
   try {
-    console.log("Received message:", message);
     const products = await fetchProducts();
 
-    // Generate product and variant info
-    let productList = "";
-    for (const product of products) {
-      productList += `\n${product.title}:\n`;
-      for (const variantEdge of product.variants.edges) {
-        const v = variantEdge.node;
-        const availability = v.availableForSale ? "In Stock" : "Out of Stock";
-        productList += ` - ${v.title}: $${v.price.amount} (${availability})\n`;
+    // Recommend size if height is provided
+    const sizeSuggestion = height ? recommendSize(parseInt(height)) : null;
+
+    // If order info is provided
+    if (selectedProduct && selectedSize) {
+      const product = products.find(p => p.title.toLowerCase() === selectedProduct.toLowerCase());
+
+      if (!product) {
+        return res.status(404).json({ reply: `Product "${selectedProduct}" not found.` });
       }
+
+      const variant = product.variants.edges.find(v =>
+        v.node.title.toLowerCase().includes(selectedSize.toLowerCase())
+      );
+
+      if (!variant || !variant.node.availableForSale) {
+        return res.status(404).json({ reply: `Size ${selectedSize} is out of stock for ${selectedProduct}.` });
+      }
+
+      const checkoutUrl = await createCheckoutLineItems(variant.node.id);
+
+      return res.status(200).json({
+        reply: `Thanks ${name}! Your order for ${selectedProduct} (Size ${selectedSize}) is ready.\n\n📦 Address: ${address}\n📞 Phone: ${phone}\n\nClick below to complete your purchase:\n${checkoutUrl}`
+      });
     }
 
-    // Size recommendation logic
-    const sizeGuide = `
-Size recommendation based on height:
-- 140cm - 160cm: S
-- 160cm - 180cm: M
-- 180cm - 195cm: L
-- 195cm - 205cm: XL
-- 205cm+: 2XL
-    `.trim();
+    // Else, continue conversation with product list and size suggestion
+    const productList = products
+      .map(p => {
+        const prices = p.variants.edges.map(v => `$${v.node.price.amount}`).join(", ");
+        return `${p.title} - Available sizes: ${p.variants.edges.map(v => v.node.title).join(", ")} - Prices: ${prices}`;
+      })
+      .join("\n\n");
 
-    const systemMessage = `
-You are a smart shopping assistant for a clothing store.
-
-Your tasks:
-- Recommend product sizes based on height (in cm)
-- Tell customers whether a specific size is in stock
-- Always refer to product names and variant availability below.
-
-${sizeGuide}
-
-Here are the available products and variants:
-
-${productList}
-    `.trim();
+    const systemPrompt = `You are a helpful shopping assistant. Available products:\n\n${productList}\n\nIf the user provides height, recommend size (S: 140–160cm, M: 160–180cm, L: 180–195cm, XL: 195–210cm, 2XL: above).\nIf they provide name, address, phone, and product/size, confirm and give them the checkout URL.`;
 
     const openaiResponse = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
-        { role: "system", content: systemMessage },
+        { role: "system", content: systemPrompt },
         { role: "user", content: message }
       ],
     });
 
     const reply = openaiResponse.choices[0].message.content;
-    console.log("OpenAI reply:", reply);
-    res.status(200).json({ reply });
-
+    res.status(200).json({ reply, sizeSuggestion });
   } catch (error) {
-    console.error("Handler error:", error.response?.data || error.message || error);
-    res.status(500).json({ error: "Error fetching products or generating reply" });
+    console.error("Error:", error);
+    res.status(500).json({ error: "Something went wrong processing the request." });
   }
 }
