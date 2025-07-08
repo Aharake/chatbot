@@ -52,9 +52,9 @@ async function fetchProducts() {
 let userOrderMemory = {};
 
 function isOrderComplete(order) {
+  // Removed address requirement
   return (
     order.name &&
-    order.address &&
     order.phone &&
     order.product &&
     order.size
@@ -62,16 +62,17 @@ function isOrderComplete(order) {
 }
 
 function getNextMissingField(order) {
+  // Skip address field
   if (!order.name) return "full name";
-  if (!order.address) return "delivery address";
   if (!order.phone) return "phone number";
   if (!order.product || !order.size) return "product name and size";
   return null;
 }
 
 const isSmallTalk = message => {
-  const normalized = message.toLowerCase();
-  return ["hello", "hi", "hey", "good morning", "good evening"].some(p => normalized.includes(p));
+  const normalized = message.toLowerCase().trim();
+  const greetings = ["hello", "hi", "hey", "ey", "good morning", "good evening"];
+  return greetings.some(p => normalized === p || normalized.includes(p));
 };
 
 export default async function handler(req, res) {
@@ -96,7 +97,7 @@ export default async function handler(req, res) {
     const products = await fetchProducts();
     const productTitles = products.map(p => p.title).join("\n");
 
-    const systemPrompt = `You are a helpful shopping assistant chatbot. You are collecting an order for a Shopify store. Products available:\n${productTitles}\n\nAsk the user for their name, address, phone number, product name and size. Accept height in cm and map it to sizes:\n- 140-160 cm: S\n- 160-180 cm: M\n- 180-195 cm: L\n- 195-205 cm: XL\n- 205+ cm: 2XL\nRespond with one missing field at a time, and once all fields are collected, summarize the order. Don't ask the user to re-enter details they already gave. Just help if they ask questions.`;
+    const systemPrompt = `You are a helpful shopping assistant chatbot. You are collecting an order for a Shopify store. Products available:\n${productTitles}\n\nAsk the user for their name, phone number, product name and size. Accept height in cm and map it to sizes:\n- 140-160 cm: S\n- 160-180 cm: M\n- 180-195 cm: L\n- 195-205 cm: XL\n- 205+ cm: 2XL\nRespond with one missing field at a time, and once all fields are collected, summarize the order. Don't ask the user to re-enter details they already gave. Just help if they ask questions.`;
 
     const chatHistory = [
       { role: "system", content: systemPrompt },
@@ -110,23 +111,17 @@ export default async function handler(req, res) {
 
     const reply = completion.choices[0].message.content;
 
+    // Save name only if it looks like a full name (2+ words, 2+ letters each)
     if (!order.name) {
-      const words = message.trim().split(/\s+/);
-      if (
-        words.length >= 2 &&
-        words.length <= 4 &&
-        words.every(w => /^[a-zA-Z]{2,}$/.test(w))
-      ) {
+      const namePattern = /^[a-zA-Z]{2,}(?:\s+[a-zA-Z]{2,})+$/;
+      if (namePattern.test(message.trim())) {
         order.name = message.trim();
       }
     }
 
-    if (!order.address) {
-      if (message.length >= 10 && /[a-zA-Z]{3,}/.test(message)) {
-        order.address = message.trim();
-      }
-    }
+    // Skip address entirely (no code here for address)
 
+    // Extract phone number if missing
     if (!order.phone) {
       const phoneMatch = message.match(/(?:phone is|call me at)?\s*(\+?\d{7,15})/);
       if (phoneMatch) {
@@ -134,6 +129,7 @@ export default async function handler(req, res) {
       }
     }
 
+    // Extract size
     if (!order.size) {
       const sizeMatch = message.match(/\b(S|M|L|XL|2XL)\b/i);
       if (sizeMatch) {
@@ -151,6 +147,7 @@ export default async function handler(req, res) {
       }
     }
 
+    // Extract product from message if missing
     if (!order.product) {
       for (let p of products) {
         if (message.toLowerCase().includes(p.title.toLowerCase())) {
@@ -181,7 +178,7 @@ export default async function handler(req, res) {
     userOrderMemory[userId] = {};
 
     return res.status(200).json({
-      reply: `✅ Order confirmed!\n\n👤 Name: ${order.name}\n📍 Address: ${order.address}\n📞 Phone: ${order.phone}\n🛍️ Product: ${order.product} (${order.size})\n\n👉 [Click here to checkout](${checkoutUrl})\n\nIf you have any other questions, just ask!`
+      reply: `✅ Order confirmed!\n\n👤 Name: ${order.name}\n📞 Phone: ${order.phone}\n🛍️ Product: ${order.product} (${order.size})\n\n👉 <a href="${checkoutUrl}" target="_blank" rel="noopener noreferrer">Click here to checkout</a>\n\nIf you have any other questions, just ask!`
     });
 
   } catch (error) {
