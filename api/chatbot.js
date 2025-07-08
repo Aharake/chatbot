@@ -104,10 +104,16 @@ export default async function handler(req, res) {
     const reply = completion.choices[0].message.content;
 
     // Attempt to extract user info from the message
-    if (!order.name && /my name is|i am|i'm ([a-zA-Z ]+)/i.test(message)) {
-      const match = message.match(/my name is|i am|i'm ([a-zA-Z ]+)/i);
-      order.name = match[1].trim();
-    }
+    if (!order.name) {
+  const nameMatch = message.match(/(?:my name is|i am|i'm)\s+([a-zA-Z\s]+)/i);
+  if (nameMatch) {
+    order.name = nameMatch[1].trim();
+  } else if (!order.address && !order.phone && message.trim().split(" ").length <= 4) {
+    // Fallback: assume it's a name if it's short and no other fields exist yet
+    order.name = message.trim();
+  }
+}
+
     if (!order.address && /address is|live at ([^\n]+)/i.test(message)) {
       const match = message.match(/address is|live at ([^\n]+)/i);
       order.address = match[1].trim();
