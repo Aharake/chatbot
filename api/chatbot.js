@@ -96,7 +96,7 @@ export default async function handler(req, res) {
     const products = await fetchProducts();
     const productTitles = products.map(p => p.title).join("\n");
 
-    const systemPrompt = `You are a helpful shopping assistant chatbot. You are collecting an order for a Shopify store. Products available:\n${productTitles}\n\nAsk the user for their name, address, phone number, product name and size. Accept height in cm and map it to sizes:\n- 140-160 cm: S\n- 160-180 cm: M\n- 180-195 cm: L\n- 195-205 cm: XL\n- 205+ cm: 2XL\nRespond with one missing field at a time, and once all fields are collected, summarize the order.`;
+    const systemPrompt = `You are a helpful shopping assistant chatbot. You are collecting an order for a Shopify store. Products available:\n${productTitles}\n\nAsk the user for their name, address, phone number, product name and size. Accept height in cm and map it to sizes:\n- 140-160 cm: S\n- 160-180 cm: M\n- 180-195 cm: L\n- 195-205 cm: XL\n- 205+ cm: 2XL\nRespond with one missing field at a time, and once all fields are collected, summarize the order. Don't ask the user to re-enter details they already gave. Just help if they ask questions.`;
 
     const chatHistory = [
       { role: "system", content: systemPrompt },
@@ -174,11 +174,14 @@ export default async function handler(req, res) {
       return res.status(200).json({ reply: `Sorry, ${order.product} in size ${order.size} is out of stock.` });
     }
 
-    const checkoutUrl = `https://${SHOPIFY_DOMAIN}/cart/${matchedVariant.node.id.split("/").pop()}:1`;
-    userOrderMemory[userId] = null;
+    const variantIdShort = matchedVariant.node.id.split("/").pop();
+    const checkoutUrl = `https://${SHOPIFY_DOMAIN}/cart/${variantIdShort}:1`;
+
+    // Clear order memory so next order can start fresh
+    userOrderMemory[userId] = {};
 
     return res.status(200).json({
-      reply: `✅ Order confirmed!\n\n👤 Name: ${order.name}\n📍 Address: ${order.address}\n📞 Phone: ${order.phone}\n🛍️ Product: ${order.product} (${order.size})\n\n👉 [Click here to checkout](${checkoutUrl})`
+      reply: `✅ Order confirmed!\n\n👤 Name: ${order.name}\n📍 Address: ${order.address}\n📞 Phone: ${order.phone}\n🛍️ Product: ${order.product} (${order.size})\n\n👉 [Click here to checkout](${checkoutUrl})\n\nIf you have any other questions, just ask!`
     });
 
   } catch (error) {
