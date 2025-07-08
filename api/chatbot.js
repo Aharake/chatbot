@@ -16,9 +16,15 @@ async function fetchProducts() {
             title
             description
             onlineStoreUrl
-            priceRange {
-              minVariantPrice {
-                amount
+            variants(first: 10) {
+              edges {
+                node {
+                  title
+                  availableForSale
+                  price {
+                    amount
+                  }
+                }
               }
             }
           }
@@ -41,58 +47,74 @@ async function fetchProducts() {
 }
 
 export default async function handler(req, res) {
-  // CORS headers - adjust allowed origin accordingly
-  const allowedOrigin = "https://aliharake.pro"; // Change this to your Shopify store domain or use '*' for testing
-
+  // CORS headers
+  const allowedOrigin = "https://aliharake.pro";
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    // Handle preflight requests
-    res.status(200).end();
-    return;
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const { message } = req.body;
-
   if (!message || message.trim() === "") {
     return res.status(400).json({ error: "Message is required" });
   }
 
   try {
     console.log("Received message:", message);
-
     const products = await fetchProducts();
 
-    const productList = products
-      .map(p => `${p.title} - $${p.priceRange.minVariantPrice.amount}`)
-      .join("\n");
+    // Generate product and variant info
+    let productList = "";
+    for (const product of products) {
+      productList += `\n${product.title}:\n`;
+      for (const variantEdge of product.variants.edges) {
+        const v = variantEdge.node;
+        const availability = v.availableForSale ? "In Stock" : "Out of Stock";
+        productList += ` - ${v.title}: $${v.price.amount} (${availability})\n`;
+      }
+    }
+
+    // Size recommendation logic
+    const sizeGuide = `
+Size recommendation based on height:
+- 140cm - 160cm: S
+- 160cm - 180cm: M
+- 180cm - 195cm: L
+- 195cm - 205cm: XL
+- 205cm+: 2XL
+    `.trim();
+
+    const systemMessage = `
+You are a smart shopping assistant for a clothing store.
+
+Your tasks:
+- Recommend product sizes based on height (in cm)
+- Tell customers whether a specific size is in stock
+- Always refer to product names and variant availability below.
+
+${sizeGuide}
+
+Here are the available products and variants:
+
+${productList}
+    `.trim();
 
     const openaiResponse = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
-        {
-          role: "system",
-          content: "You are a shopping assistant. Here's the list of products available:\n\n" + productList
-        },
-        {
-          role: "user",
-          content: message
-        }
+        { role: "system", content: systemMessage },
+        { role: "user", content: message }
       ],
     });
 
     const reply = openaiResponse.choices[0].message.content;
     console.log("OpenAI reply:", reply);
-
     res.status(200).json({ reply });
+
   } catch (error) {
-    console.error("Error in handler:", error.response?.data || error.message || error);
+    console.error("Handler error:", error.response?.data || error.message || error);
     res.status(500).json({ error: "Error fetching products or generating reply" });
   }
 }
