@@ -5,7 +5,7 @@ const openai = new OpenAI({
 });
 
 const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
-const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com";
+const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com"; // your store domain
 
 async function fetchProducts() {
   const query = `
@@ -13,21 +13,18 @@ async function fetchProducts() {
       products(first: 5) {
         edges {
           node {
-            id
             title
             description
+            onlineStoreUrl
             variants(first: 10) {
               edges {
                 node {
-                  id
                   title
                   availableForSale
+                  price {
+                    amount
+                  }
                 }
-              }
-            }
-            priceRange {
-              minVariantPrice {
-                amount
               }
             }
           }
@@ -49,25 +46,8 @@ async function fetchProducts() {
   return data.data.products.edges.map(edge => edge.node);
 }
 
-const isSmallTalk = message => {
-  const normalized = message.toLowerCase();
-  return ["hello", "hi", "hey", "good morning", "good evening"].some(p => normalized.includes(p));
-};
-
-const isProductInquiry = message => {
-  return /(in stock|available|have|stock)/i.test(message);
-};
-
-function mapHeightToSize(height) {
-  if (height >= 205) return "2XL";
-  if (height >= 195) return "XL";
-  if (height >= 180) return "L";
-  if (height >= 160) return "M";
-  if (height >= 140) return "S";
-  return null;
-}
-
 export default async function handler(req, res) {
+  // CORS headers
   const allowedOrigin = "https://aliharake.pro";
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -77,69 +57,64 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const { message } = req.body;
-  const msgLower = message.toLowerCase();
+  if (!message || message.trim() === "") {
+    return res.status(400).json({ error: "Message is required" });
+  }
 
   try {
-    if (isSmallTalk(message)) {
-      return res.status(200).json({
-        reply: "👋 Hello! I'm your shopping assistant. I can help you with product info and sizing. Ask me about our products!"
-      });
-    }
+    console.log("Received message:", message);
+    const products = await fetchProducts();
 
-    // Check for height in cm (e.g. "I'm 175 cm tall")
-    const heightMatch = message.match(/\b(1[4-9][0-9]|2[0-1][0-9]|205|20[6-9]|210|215|220)\b/);
-    let detectedSize = null;
-    if (heightMatch) {
-      const height = parseInt(heightMatch[0], 10);
-      detectedSize = mapHeightToSize(height);
-    }
-
-    if (isProductInquiry(message)) {
-      const products = await fetchProducts();
-      const matchedProduct = products.find(p =>
-        msgLower.includes(p.title.toLowerCase())
-      );
-
-      if (matchedProduct) {
-        const availableVariants = matchedProduct.variants.edges.filter(v => v.node.availableForSale);
-        if (availableVariants.length > 0) {
-          let sizeMsg = "";
-          if (detectedSize) {
-            sizeMsg = ` Based on your height, the recommended size is ${detectedSize}.`;
-          }
-          return res.status(200).json({
-            reply: `Yes, ${matchedProduct.title} is available in sizes: ${availableVariants.map(v => v.node.title).join(", ")}.${sizeMsg}`
-          });
-        } else {
-          return res.status(200).json({
-            reply: `Sorry, ${matchedProduct.title} is currently out of stock.`
-          });
-        }
-      } else {
-        return res.status(200).json({
-          reply: `Sorry, I couldn't find that product. Please ask about another item or browse our products.`
-        });
+    // Generate product and variant info
+    let productList = "";
+    for (const product of products) {
+      productList += `\n${product.title}:\n`;
+      for (const variantEdge of product.variants.edges) {
+        const v = variantEdge.node;
+        const availability = v.availableForSale ? "In Stock" : "Out of Stock";
+        productList += ` - ${v.title}: $${v.price.amount} (${availability})\n`;
       }
     }
 
-    // Fallback to GPT-3.5 for anything else, telling it not to ask for personal info
-    const completion = await openai.chat.completions.create({
+    // Size recommendation logic
+    const sizeGuide = `
+Size recommendation based on height:
+- 140cm - 160cm: S
+- 160cm - 180cm: M
+- 180cm - 195cm: L
+- 195cm - 205cm: XL
+- 205cm+: 2XL
+    `.trim();
+
+    const systemMessage = `
+You are a smart shopping assistant for a clothing store.
+
+Your tasks:
+- Recommend product sizes based on height (in cm)
+- Tell customers whether a specific size is in stock
+- Always refer to product names and variant availability below.
+
+${sizeGuide}
+
+Here are the available products and variants:
+
+${productList}
+    `.trim();
+
+    const openaiResponse = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
-        {
-          role: "system",
-          content: "You are a friendly shopping assistant chatbot that helps users with product info and sizing advice. Do not ask for orders or personal info."
-        },
+        { role: "system", content: systemMessage },
         { role: "user", content: message }
       ],
     });
 
-    const reply = completion.choices[0].message.content;
-
-    return res.status(200).json({ reply });
+    const reply = openaiResponse.choices[0].message.content;
+    console.log("OpenAI reply:", reply);
+    res.status(200).json({ reply });
 
   } catch (error) {
-    console.error("Error:", error);
-    return res.status(500).json({ error: "Something went wrong." });
+    console.error("Handler error:", error.response?.data || error.message || error);
+    res.status(500).json({ error: "Error fetching products or generating reply" });
   }
 }
