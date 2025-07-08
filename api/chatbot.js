@@ -69,6 +69,11 @@ function getNextMissingField(order) {
   return null;
 }
 
+const isSmallTalk = message => {
+  const normalized = message.toLowerCase();
+  return ["hello", "hi", "hey", "good morning", "good evening"].some(p => normalized.includes(p));
+};
+
 export default async function handler(req, res) {
   const allowedOrigin = "https://aliharake.pro";
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
@@ -84,6 +89,10 @@ export default async function handler(req, res) {
   const order = userOrderMemory[userId];
 
   try {
+    if (isSmallTalk(message)) {
+      return res.status(200).json({ reply: "👋 Hello! I'm your shopping assistant. I can help you place an order. Just tell me what you'd like to buy!" });
+    }
+
     const products = await fetchProducts();
     const productTitles = products.map(p => p.title).join("\n");
 
@@ -102,19 +111,18 @@ export default async function handler(req, res) {
     const reply = completion.choices[0].message.content;
 
     if (!order.name) {
-      const nameMatch = message.match(/(?:my name is|i am|i'm)\s+([a-zA-Z\s]+)/i);
-      if (nameMatch) {
-        order.name = nameMatch[1].trim();
-      } else if (/^[a-zA-Z ]{3,30}$/.test(message.trim())) {
+      const words = message.trim().split(/\s+/);
+      if (
+        words.length >= 2 &&
+        words.length <= 4 &&
+        words.every(w => /^[a-zA-Z]{2,}$/.test(w))
+      ) {
         order.name = message.trim();
       }
     }
 
     if (!order.address) {
-      const addressMatch = message.match(/(?:address is|live at|located at)\s+(.+)/i);
-      if (addressMatch) {
-        order.address = addressMatch[1].trim();
-      } else if (message.length >= 10 && /[a-zA-Z]{3,}/.test(message)) {
+      if (message.length >= 10 && /[a-zA-Z]{3,}/.test(message)) {
         order.address = message.trim();
       }
     }
@@ -131,7 +139,7 @@ export default async function handler(req, res) {
       if (sizeMatch) {
         order.size = sizeMatch[1].toUpperCase();
       } else {
-        const heightMatch = message.match(/\b(1[4-9][0-9]|2[0-1][0-9])\b/);
+        const heightMatch = message.match(/\b(1[4-9][0-9]|2[0-1][0-9]|20[5-9])\b/);
         if (heightMatch) {
           const height = parseInt(heightMatch[0]);
           if (height < 160) order.size = "S";
