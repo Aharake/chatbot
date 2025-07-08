@@ -5,15 +5,12 @@ const openai = new OpenAI({
 });
 
 const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
-const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com";
+const SHOPIFY_DOMAIN = "rx3brg-0q.myshopify.com"; // replace with your store domain
 
-// -----------------------------
-// Fetch Products and Variants
-// -----------------------------
 async function fetchProducts() {
   const query = `
     {
-      products(first: 10) {
+      products(first: 5) {
         edges {
           node {
             id
@@ -25,10 +22,12 @@ async function fetchProducts() {
                   id
                   title
                   availableForSale
-                  price {
-                    amount
-                  }
                 }
+              }
+            }
+            priceRange {
+              minVariantPrice {
+                amount
               }
             }
           }
@@ -50,132 +49,114 @@ async function fetchProducts() {
   return data.data.products.edges.map(edge => edge.node);
 }
 
-// -----------------------------
-// Recommend Size by Height
-// -----------------------------
-function recommendSize(height) {
-  if (height >= 140 && height < 160) return "S";
-  if (height >= 160 && height < 180) return "M";
-  if (height >= 180 && height < 195) return "L";
-  if (height >= 195 && height < 210) return "XL";
-  return "2XL";
+// Simple memory store — replace with real DB/session if needed
+let userOrderMemory = {};
+
+function isOrderComplete(order) {
+  return (
+    order.name &&
+    order.address &&
+    order.phone &&
+    order.product &&
+    order.size
+  );
 }
 
-// -----------------------------
-// Create Checkout Link
-// -----------------------------
-async function createCheckoutLineItems(variantId) {
-  const checkoutQuery = `
-    mutation {
-      checkoutCreate(input: {
-        lineItems: [
-          {
-            variantId: "${variantId}",
-            quantity: 1
-          }
-        ]
-      }) {
-        checkout {
-          id
-          webUrl
-        }
-        userErrors {
-          field
-          message
-        }
-      }
-    }
-  `;
-
-  const response = await fetch(`https://${SHOPIFY_DOMAIN}/api/2023-07/graphql.json`, {
-    method: "POST",
-    headers: {
-      "X-Shopify-Storefront-Access-Token": SHOPIFY_TOKEN,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query: checkoutQuery }),
-  });
-
-  const result = await response.json();
-  return result.data.checkoutCreate.checkout.webUrl;
+function getNextMissingField(order) {
+  if (!order.name) return "full name";
+  if (!order.address) return "delivery address";
+  if (!order.phone) return "phone number";
+  if (!order.product || !order.size) return "product name and size";
+  return null;
 }
 
-// -----------------------------
-// API Handler
-// -----------------------------
 export default async function handler(req, res) {
-  // --- CORS ---
   const allowedOrigin = "https://aliharake.pro";
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    res.status(200).end();
-    return;
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
+  const { message } = req.body;
+  const userId = "shopify-session"; // In production, use real session/user ID
+  if (!userOrderMemory[userId]) userOrderMemory[userId] = {};
+  const order = userOrderMemory[userId];
 
-  const { message, height, name, phone, address, selectedProduct, selectedSize } = req.body;
-
-  if (!message || message.trim() === "") {
-    return res.status(400).json({ error: "Message is required" });
-  }
-
+  // Use OpenAI to parse message and extract details
   try {
     const products = await fetchProducts();
+    const productTitles = products.map(p => p.title).join("\n");
 
-    // Recommend size if height is provided
-    const sizeSuggestion = height ? recommendSize(parseInt(height)) : null;
+    const systemPrompt = `You are a helpful shopping assistant chatbot. You are collecting an order for a Shopify store. Products available:\n${productTitles}\n\nAsk the user for their name, address, phone number, product name and size. Accept height in cm and map it to sizes:\n- 140-160 cm: S\n- 160-180 cm: M\n- 180-195 cm: L\n- 195-205 cm: XL\n- 205+ cm: 2XL\nRespond with one missing field at a time, and once all fields are collected, summarize the order.`;
 
-    // If order info is provided
-    if (selectedProduct && selectedSize) {
-      const product = products.find(p => p.title.toLowerCase() === selectedProduct.toLowerCase());
+    const chatHistory = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: message }
+    ];
 
-      if (!product) {
-        return res.status(404).json({ reply: `Product "${selectedProduct}" not found.` });
-      }
-
-      const variant = product.variants.edges.find(v =>
-        v.node.title.toLowerCase().includes(selectedSize.toLowerCase())
-      );
-
-      if (!variant || !variant.node.availableForSale) {
-        return res.status(404).json({ reply: `Size ${selectedSize} is out of stock for ${selectedProduct}.` });
-      }
-
-      const checkoutUrl = await createCheckoutLineItems(variant.node.id);
-
-      return res.status(200).json({
-        reply: `Thanks ${name}! Your order for ${selectedProduct} (Size ${selectedSize}) is ready.\n\n📦 Address: ${address}\n📞 Phone: ${phone}\n\nClick below to complete your purchase:\n${checkoutUrl}`
-      });
-    }
-
-    // Else, continue conversation with product list and size suggestion
-    const productList = products
-      .map(p => {
-        const prices = p.variants.edges.map(v => `$${v.node.price.amount}`).join(", ");
-        return `${p.title} - Available sizes: ${p.variants.edges.map(v => v.node.title).join(", ")} - Prices: ${prices}`;
-      })
-      .join("\n\n");
-
-    const systemPrompt = `You are a helpful shopping assistant. Available products:\n\n${productList}\n\nIf the user provides height, recommend size (S: 140–160cm, M: 160–180cm, L: 180–195cm, XL: 195–210cm, 2XL: above).\nIf they provide name, address, phone, and product/size, confirm and give them the checkout URL.`;
-
-    const openaiResponse = await openai.chat.completions.create({
+    const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
-      ],
+      messages: chatHistory,
     });
 
-    const reply = openaiResponse.choices[0].message.content;
-    res.status(200).json({ reply, sizeSuggestion });
+    const reply = completion.choices[0].message.content;
+
+    // Attempt to extract user info from the message
+    if (!order.name && /my name is|i am|i'm ([a-zA-Z ]+)/i.test(message)) {
+      const match = message.match(/my name is|i am|i'm ([a-zA-Z ]+)/i);
+      order.name = match[1].trim();
+    }
+    if (!order.address && /address is|live at ([^\n]+)/i.test(message)) {
+      const match = message.match(/address is|live at ([^\n]+)/i);
+      order.address = match[1].trim();
+    }
+    if (!order.phone && /phone is|call me at ([0-9\-\+ ]+)/i.test(message)) {
+      const match = message.match(/phone is|call me at ([0-9\-\+ ]+)/i);
+      order.phone = match[1].trim();
+    }
+    if (!order.size && /\b(140|150|160|170|180|190|200|210)\b/.test(message)) {
+      const height = parseInt(message.match(/\b(140|150|160|170|180|190|200|210)\b/)[0]);
+      if (height < 160) order.size = "S";
+      else if (height < 180) order.size = "M";
+      else if (height < 195) order.size = "L";
+      else if (height < 205) order.size = "XL";
+      else order.size = "2XL";
+    }
+    if (!order.product) {
+      for (let p of products) {
+        if (message.toLowerCase().includes(p.title.toLowerCase())) {
+          order.product = p.title;
+          break;
+        }
+      }
+    }
+
+    if (!isOrderComplete(order)) {
+      const missing = getNextMissingField(order);
+      return res.status(200).json({ reply: `Please provide your ${missing}.` });
+    }
+
+    const matchedProduct = products.find(p => p.title.toLowerCase().includes(order.product.toLowerCase()));
+    const matchedVariant = matchedProduct.variants.edges.find(edge =>
+      edge.node.title.toLowerCase().includes(order.size.toLowerCase())
+    );
+
+    if (!matchedVariant || !matchedVariant.node.availableForSale) {
+      return res.status(200).json({ reply: `Sorry, ${order.product} in size ${order.size} is out of stock.` });
+    }
+
+    const checkoutUrl = `https://${SHOPIFY_DOMAIN}/cart/${matchedVariant.node.id.split("/").pop()}:1`;
+
+    userOrderMemory[userId] = null;
+
+    return res.status(200).json({
+      reply: `✅ Order confirmed!\n\n👤 Name: ${order.name}\n📍 Address: ${order.address}\n📞 Phone: ${order.phone}\n🛍️ Product: ${order.product} (${order.size})\n\n👉 [Click here to checkout](${checkoutUrl})`
+    });
+
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({ error: "Something went wrong processing the request." });
+    console.error("Order error:", error);
+    return res.status(500).json({ error: "Order processing failed." });
   }
 }
