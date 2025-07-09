@@ -47,7 +47,6 @@ async function fetchProducts() {
 }
 
 export default async function handler(req, res) {
-  // CORS headers
   const allowedOrigin = "https://aliharake.pro";
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -65,7 +64,6 @@ export default async function handler(req, res) {
     console.log("Received message:", message);
     const products = await fetchProducts();
 
-    // Generate product and variant info
     let productList = "";
     for (const product of products) {
       productList += `\n${product.title}:\n`;
@@ -76,7 +74,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Size recommendation logic
     const sizeGuide = `
 Size recommendation based on height:
 - 140cm - 160cm: S
@@ -86,18 +83,31 @@ Size recommendation based on height:
 - 205cm+: 2XL
     `.trim();
 
+    const faqAnswers = `
+Extra Information for FAQs:
+
+1. Sizes Available: Sizes usually include S, M, L, XL, and 2XL. Availability varies by product.
+2. How to know your size: Refer to this size guide:\n${sizeGuide}
+3. Size Guide: Use the chart above to determine your recommended size by height.
+4. Authentic vs Replica: Jerseys are replicas, but very high quality and detailed.
+5. Kids Sizes: Yes, we offer kids' sizes.
+6. Customization: Yes, you can add a name/number for $6. It takes about an extra week.
+7. Restock Info: If an item is out of stock, ordering it means it usually arrives within 1–2 weeks.
+8. Other Teams/Leagues: Yes! We offer various teams and leagues. Here's a sample:\n${productList}
+9. Accessories: Yes, we sell socks, shorts, and other items. Please check the site for available accessories.
+    `.trim();
+
     const systemMessage = `
 You are a smart shopping assistant for a clothing store.
 
 Your tasks:
-- Recommend product sizes based on height (in cm)
-- Tell customers whether a specific size is in stock
-- Always refer to product names and variant availability below.
+- Answer common customer questions listed in FAQs below.
+- Recommend product sizes based on height (in cm).
+- Indicate whether a size is in stock or not based on the product data.
 
-${sizeGuide}
+${faqAnswers}
 
 Here are the available products and variants:
-
 ${productList}
     `.trim();
 
